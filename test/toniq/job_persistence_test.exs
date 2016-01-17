@@ -7,6 +7,7 @@ defmodule Exredis.JobPersistenceTest do
   end
 
   defmodule SomeWorker do
+    def max_concurrency, do: 1
   end
 
   test "can persist job state" do
