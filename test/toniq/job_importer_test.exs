@@ -1,6 +1,8 @@
 defmodule Exredis.JobImporterTest do
   use ExUnit.Case
 
+  alias Toniq.RedisConnection
+
   defmodule TestWorker do
     use Toniq.Worker
 
@@ -10,7 +12,7 @@ defmodule Exredis.JobImporterTest do
   end
 
   setup do
-    Process.whereis(:toniq_redis) |> Exredis.query(["FLUSHDB"])
+    RedisConnection.worker fn(pid) -> Exredis.query(pid, ["FLUSHDB"]) end
     :ok
   end
 

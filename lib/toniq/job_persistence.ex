@@ -1,6 +1,8 @@
 defmodule Toniq.JobPersistence do
   import Exredis.Api
 
+  alias Toniq.RedisConnection
+
   @doc """
   Stores a job in redis. If it does not succeed it will fail right away.
   """
@@ -15,7 +17,9 @@ defmodule Toniq.JobPersistence do
 
   # Only used internally by JobImporter
   def remove_from_incoming_jobs(job) do
-    redis |> srem(incoming_jobs_key(default_identifier), strip_vm_identifier(job))
+    RedisConnection.worker fn(pid) ->
+      srem(pid, incoming_jobs_key(default_identifier), strip_vm_identifier(job))
+    end
   end
 
   @doc """
@@ -37,8 +41,9 @@ defmodule Toniq.JobPersistence do
   Marks a job as finished. This means that it's deleted from redis.
   """
   def mark_as_successful(job, identifier \\ default_identifier) do
-    redis
-    |> srem(jobs_key(identifier), strip_vm_identifier(job))
+    RedisConnection.worker fn(pid) ->
+      srem(pid, jobs_key(identifier), strip_vm_identifier(job))
+    end
   end
 
   @doc """
@@ -47,12 +52,14 @@ defmodule Toniq.JobPersistence do
   def mark_as_failed(job, error, identifier \\ default_identifier) do
     job_with_error = Map.put(job, :error, error)
 
-    redis |> Exredis.query_pipe([
-      ["MULTI"],
-      ["SREM", jobs_key(identifier), strip_vm_identifier(job)],
-      ["SADD", failed_jobs_key(identifier), strip_vm_identifier(job_with_error)],
-      ["EXEC"],
-    ])
+    RedisConnection.worker fn(pid) ->
+      Exredis.query_pipe(pid, [
+        ["MULTI"],
+        ["SREM", jobs_key(identifier), strip_vm_identifier(job)],
+        ["SADD", failed_jobs_key(identifier), strip_vm_identifier(job_with_error)],
+        ["EXEC"],
+      ])
+    end
 
     job_with_error
   end
@@ -65,12 +72,14 @@ defmodule Toniq.JobPersistence do
   def move_failed_job_to_incomming_jobs(job_with_error) do
     job = Map.delete(job_with_error, :error)
 
-    redis |> Exredis.query_pipe([
-      ["MULTI"],
-      ["SREM", failed_jobs_key(job.vm), strip_vm_identifier(job_with_error)],
-      ["SADD", incoming_jobs_key(job.vm), strip_vm_identifier(job)],
-      ["EXEC"],
-    ])
+    RedisConnection.worker fn(pid) ->
+      Exredis.query_pipe(pid, [
+        ["MULTI"],
+        ["SREM", failed_jobs_key(job.vm), strip_vm_identifier(job_with_error)],
+        ["SADD", incoming_jobs_key(job.vm), strip_vm_identifier(job)],
+        ["EXEC"],
+      ])
+    end
 
     job
   end
@@ -81,8 +90,7 @@ defmodule Toniq.JobPersistence do
   Uses "job.vm" to do the operation in the correct namespace.
   """
   def delete_failed_job(job) do
-    redis
-    |> srem(failed_jobs_key(job.vm), strip_vm_identifier(job))
+    RedisConnection.worker fn(pid) -> srem(pid, failed_jobs_key(job.vm), strip_vm_identifier(job)) end
   end
 
   def jobs_key(identifier) do
@@ -98,20 +106,21 @@ defmodule Toniq.JobPersistence do
   end
 
   defp store_job_in_key(worker_module, arguments, key, identifier) do
-    job_id = redis |> incr(counter_key)
+    job_id = RedisConnection.worker fn(pid) -> incr(pid, counter_key) end
 
     job = Toniq.Job.build(job_id, worker_module, arguments) |> add_vm_identifier(identifier)
-    redis |> sadd(key, strip_vm_identifier(job))
+    RedisConnection.worker fn(pid) -> sadd(pid, key, strip_vm_identifier(job)) end
     job
   end
 
   defp load_jobs(redis_key, identifier) do
-    redis
-    |> smembers(redis_key)
-    |> Enum.map(&build_job/1)
-    |> Enum.sort(&first_in_first_out/2)
-    |> Enum.map(fn (job) -> convert_to_latest_job_format(job, redis_key) end)
-    |> Enum.map(fn (job) -> add_vm_identifier(job, identifier) end)
+    RedisConnection.worker fn(pid) ->
+      smembers(pid, redis_key)
+      |> Enum.map(&build_job/1)
+      |> Enum.sort(&first_in_first_out/2)
+      |> Enum.map(fn (job) -> convert_to_latest_job_format(job, redis_key) end)
+      |> Enum.map(fn (job) -> add_vm_identifier(job, identifier) end)
+    end
   end
 
   defp build_job(data) do
@@ -126,12 +135,14 @@ defmodule Toniq.JobPersistence do
       {:unchanged, job} ->
         job
       {:changed, old, new} ->
-        redis |> Exredis.query_pipe([
-          ["MULTI"],
-          ["SREM", redis_key, old],
-          ["SADD", redis_key, new],
-          ["EXEC"],
-        ])
+        RedisConnection.worker fn(pid) ->
+          Exredis.query_pipe(pid, [
+            ["MULTI"],
+            ["SREM", redis_key, old],
+            ["SADD", redis_key, new],
+            ["EXEC"],
+          ])
+        end
 
         new
     end
@@ -153,10 +164,6 @@ defmodule Toniq.JobPersistence do
   defp identifier_scoped_key(key, identifier) do
     prefix = Application.get_env(:toniq, :redis_key_prefix)
     "#{prefix}:#{identifier}:#{key}"
-  end
-
-  defp redis do
-    Process.whereis(:toniq_redis)
   end
 
   defp default_identifier, do: Toniq.Keepalive.identifier

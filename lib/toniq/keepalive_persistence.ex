@@ -1,4 +1,6 @@
 defmodule Toniq.KeepalivePersistence do
+  alias Toniq.RedisConnection
+
   def register_vm(identifier) do
     redis_query(["SADD", registered_vms_key, identifier])
   end
@@ -21,50 +23,51 @@ defmodule Toniq.KeepalivePersistence do
   end
 
   def takeover_jobs(from_identifier, to_identifier) do
-    redis
-    |> Exredis.query_pipe([
-      # Begin transaction
-      ["MULTI"],
+    RedisConnection.worker fn(pid) ->
+      Exredis.query_pipe(pid, [
+        # Begin transaction
+        ["MULTI"],
 
-      # Copy orphaned jobs to incoming jobs
-      #
-      # We copy jobs to incoming jobs so that they will be
-      # enqueued and run in this vm. Data in redis is just
-      # a backup, we only poll for incoming jobs.
-      [
-        "SUNIONSTORE",
-        incoming_jobs_key(to_identifier),
-        jobs_key(from_identifier),
-        incoming_jobs_key(from_identifier),
-        incoming_jobs_key(to_identifier)
-      ],
+        # Copy orphaned jobs to incoming jobs
+        #
+        # We copy jobs to incoming jobs so that they will be
+        # enqueued and run in this vm. Data in redis is just
+        # a backup, we only poll for incoming jobs.
+        [
+          "SUNIONSTORE",
+          incoming_jobs_key(to_identifier),
+          jobs_key(from_identifier),
+          incoming_jobs_key(from_identifier),
+          incoming_jobs_key(to_identifier)
+        ],
 
-      # Move failed jobs
-      [
-        "SUNIONSTORE",
-        failed_jobs_key(to_identifier),
-        failed_jobs_key(from_identifier),
-        failed_jobs_key(to_identifier),
-      ],
+        # Move failed jobs
+        [
+          "SUNIONSTORE",
+          failed_jobs_key(to_identifier),
+          failed_jobs_key(from_identifier),
+          failed_jobs_key(to_identifier),
+        ],
 
-      # Remove orphaned job lists
-      [
-        "DEL",
-        jobs_key(from_identifier),
-        failed_jobs_key(from_identifier),
-        incoming_jobs_key(from_identifier)
-      ],
+        # Remove orphaned job lists
+        [
+          "DEL",
+          jobs_key(from_identifier),
+          failed_jobs_key(from_identifier),
+          incoming_jobs_key(from_identifier)
+        ],
 
-      # Deregister missing vm
-      [
-        "SREM",
-        registered_vms_key,
-        from_identifier
-      ],
+        # Deregister missing vm
+        [
+          "SREM",
+          registered_vms_key,
+          from_identifier
+        ],
 
-      # Execute transaction
-      ["EXEC"]
-    ])
+        # Execute transaction
+        ["EXEC"]
+      ])
+    end
   end
 
   # Added so we could use it to default scope further out when we want to allow custom persistance scopes in testing.
@@ -83,12 +86,7 @@ defmodule Toniq.KeepalivePersistence do
   end
 
   defp redis_query(query) do
-    redis |> Exredis.query(query)
-  end
-
-  defp redis do
-    :toniq_redis
-    |> Process.whereis
+    RedisConnection.worker fn(pid) -> Exredis.query(pid, query) end
   end
 
   # This is not a API any production code should rely upon, but could be useful

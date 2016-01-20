@@ -1,8 +1,10 @@
 defmodule Exredis.KeepaliveTest do
   use ExUnit.Case
 
+  alias Toniq.RedisConnection
+
   setup do
-    Process.whereis(:toniq_redis) |> Exredis.query(["FLUSHDB"])
+    RedisConnection.worker fn(pid) -> Exredis.query(pid, ["FLUSHDB"]) end
     :ok
   end
 

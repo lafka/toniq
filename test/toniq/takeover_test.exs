@@ -1,8 +1,10 @@
 defmodule Exredis.TakeoverTest do
   use ExUnit.Case
 
+  alias Toniq.RedisConnection
+
   setup do
-    Process.whereis(:toniq_redis) |> Exredis.query(["FLUSHDB"])
+    RedisConnection.worker fn(pid) -> Exredis.query(pid, ["FLUSHDB"]) end
 
     # Disable import to isolate takeover in this test
     Application.put_env(:toniq, :disable_import, true)

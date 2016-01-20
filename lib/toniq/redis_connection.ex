@@ -1,6 +1,16 @@
 defmodule Toniq.RedisConnection do
   use GenServer
 
+  def worker(with_pid) do
+    case Application.get_env :toniq, :redis_provider do
+      nil ->
+        with_pid.(Process.whereis(:toniq_redis))
+
+      {m, f, a} ->
+        apply m, f, a ++ [with_pid]
+    end
+  end
+
   def start_link do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
@@ -29,10 +39,6 @@ defmodule Toniq.RedisConnection do
     Some things you could check:
 
     * Is the redis server running?
-
-    * Did you set Mix.Config in your app?
-      Example:
-      config :toniq, redis_url: "redis://localhost:6379/0"
 
     * Is the current redis_url (#{redis_url}) correct?
 

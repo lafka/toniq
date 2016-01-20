@@ -2,6 +2,8 @@ defmodule ToniqTest do
   use ExUnit.Case
   import CaptureLog
 
+  alias Toniq.RedisConnection
+
   defmodule TestWorker do
     use Toniq.Worker
 
@@ -54,7 +56,7 @@ defmodule ToniqTest do
   end
 
   setup do
-    Process.whereis(:toniq_redis) |> Exredis.query([ "FLUSHDB" ])
+    RedisConnection.worker fn(pid) -> Exredis.query(pid, ["FLUSHDB"]) end
     Toniq.KeepalivePersistence.register_vm(Toniq.Keepalive.identifier)
     :ok
   end
