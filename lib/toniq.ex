@@ -43,6 +43,15 @@ defmodule Toniq do
   def start(_type, _args) do
     import Supervisor.Spec, warn: false
 
+    case Application.get_env(:toniq, :redis_init) do
+      nil -> :ok
+      {m, f, a} ->
+        case apply m, f, a do
+          {:ok, _} -> :ok
+          :ok -> :ok
+        end
+    end
+
     Toniq.Config.init
 
     children = [
